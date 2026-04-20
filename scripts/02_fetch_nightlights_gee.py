@@ -24,10 +24,12 @@ import time
 import os
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 try:
     from config import GCP_PROJECT_ID
+
     project_id = GCP_PROJECT_ID
 except ImportError:
     project_id = os.environ.get("GCP_PROJECT_ID", "your-gcp-project-id-here")
