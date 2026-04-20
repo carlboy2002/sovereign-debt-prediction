@@ -60,7 +60,7 @@ See `sovereign_debt_dashboard.html` for an interactive results dashboard.
 
 ---
 
-## Getting Started (For New Teammates)
+## Getting Started
 
 ### 1. Clone the repository
 
