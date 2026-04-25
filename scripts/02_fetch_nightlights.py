@@ -36,6 +36,29 @@ from config import DATA_RAW, YEAR_START, YEAR_END
 
 # ── OPTION GEE (RECOMMENDED): Output from 02_fetch_nightlights_gee.py ───────
 
+
+def aggregate_country_year(df):
+    """Collapse multipart country features to one row per ISO3-year."""
+    required = {"iso3c", "year", "nightlight_raw"}
+    if not required.issubset(df.columns):
+        return df
+
+    before = len(df)
+    agg_spec = {"nightlight_raw": "mean"}
+    for col in ["nightlight_sum"]:
+        if col in df.columns:
+            agg_spec[col] = "sum"
+    for col in ["country_name", "iso_code"]:
+        if col in df.columns:
+            agg_spec[col] = "first"
+
+    df = df.groupby(["iso3c", "year"], as_index=False).agg(agg_spec)
+    collapsed = before - len(df)
+    if collapsed > 0:
+        print(f"  Collapsed {collapsed} multipart country-year rows")
+    return df
+
+
 def process_gee_csv():
     """
     Process the CSV exported from Google Earth Engine.
@@ -79,6 +102,16 @@ def process_gee_csv():
         "United Republic of Tanzania": "TZA",
         "Egypt": "EGY",
         "Libya": "LBY",
+        "Somalia": "SOM",
+        "Swaziland": "SWZ",
+        "Cape Verde": "CPV",
+        "Kyrgyzstan": "KGZ",
+        "Yemen": "YEM",
+        "Moldova, Republic of": "MDA",
+        "Dem People's Rep of Korea": "PRK",
+        "Kosovo": "XKX",
+        "South Sudan": "SSD",
+        "Micronesia (Federated States of)": "FSM",
         "Congo": "COG",
         "Democratic Republic of the Congo": "COD",
         "C\u00f4te d'Ivoire": "CIV",
@@ -114,6 +147,7 @@ def process_gee_csv():
 
     # Only use VIIRS era (2014+) to avoid DMSP/VIIRS unit mismatch
     df = df[df["year"].between(2014, YEAR_END)]
+    df = aggregate_country_year(df)
     print(f"  Mapped {df['iso3c'].nunique()} countries to ISO3")
     return df
 
@@ -263,6 +297,7 @@ def main():
         sys.exit(1)
 
     # Compute derived columns
+    df = aggregate_country_year(df)
     df = df.sort_values(["iso3c", "year"])
     df["nightlight_growth"] = (
         df.groupby("iso3c")["nightlight_raw"]

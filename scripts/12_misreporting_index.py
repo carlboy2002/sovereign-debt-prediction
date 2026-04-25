@@ -21,6 +21,9 @@ import matplotlib.pyplot as plt
 from config import DATA_PROCESSED, FIGURES, TABLES
 
 
+ANOMALY_THRESHOLD = 1.5
+
+
 def compute_raw_index(df):
     """
     Raw misreporting index = GDP growth - nightlight growth.
@@ -73,8 +76,9 @@ def compute_country_index(df):
         (nl_std_by_country["nl_growth_std"] < 30)
     ]
     df_filtered = df[df["iso3c"].isin(valid_countries["iso3c"])].copy()
+    df_filtered = df_filtered.dropna(subset=["misreport_raw", "nightlight_growth"])
     print(f"  Filtered to {df_filtered['iso3c'].nunique()} countries with "
-          f"meaningful nightlight variation")
+          f"meaningful nightlight variation and valid misreporting values")
 
     # ── Cross-country Z-score ───────────────────────────────────────────────
     # How abnormal is a country-year relative to the GLOBAL distribution?
@@ -85,8 +89,10 @@ def compute_country_index(df):
     ) / (global_std + 1e-8)
 
     # ── Anomaly flags per country-year ──────────────────────────────────────
-    # A year is "suspicious" if z-score > 1.0 (strongly positive divergence)
-    df_filtered["is_anomaly"] = (df_filtered["misreport_zscore"] > 1.0).astype(int)
+    # A year is suspicious if the z-score is strongly positive.
+    df_filtered["is_anomaly"] = (
+        df_filtered["misreport_zscore"] > ANOMALY_THRESHOLD
+    ).astype(int)
 
     anomaly_counts = (
         df_filtered.groupby("iso3c")
@@ -150,7 +156,7 @@ def plot_top_misreporters(country_avg, n=25):
     ax.barh(range(len(top)), top["anomaly_rate"] * 100, color=colors)
     ax.set_yticks(range(len(top)))
     ax.set_yticklabels(labels, fontsize=9)
-    ax.set_xlabel("% of Years with Suspicious Over-Reporting (z > 1.5)")
+    ax.set_xlabel(f"% of Years with Suspicious Over-Reporting (z > {ANOMALY_THRESHOLD:g})")
     ax.set_title(f"Top {n} Suspected Over-Reporters\n"
                  "(GDP Growth Significantly Exceeds Nightlight Growth)")
     ax.invert_yaxis()
@@ -172,7 +178,13 @@ def plot_misreporting_over_time(country_year, country_avg):
                     label=iso3c, markersize=5)
 
     ax.axhline(0, color="gray", linestyle="--", alpha=0.5)
-    ax.axhline(1.5, color="red", linestyle=":", alpha=0.5, label="Anomaly threshold (z=1.5)")
+    ax.axhline(
+        ANOMALY_THRESHOLD,
+        color="red",
+        linestyle=":",
+        alpha=0.5,
+        label=f"Anomaly threshold (z={ANOMALY_THRESHOLD:g})",
+    )
     ax.set_xlabel("Year")
     ax.set_ylabel("Misreporting Z-Score")
     ax.set_title("Misreporting Over Time — Top 8 Suspected Over-Reporters")

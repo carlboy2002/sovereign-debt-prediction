@@ -127,7 +127,7 @@ def validate_predictions(sim_df, empirical_df):
     # Prediction 1: Debt-divergence correlation
     corr = sim_df[["debt_level", "divergence"]].corr().iloc[0, 1]
     results["sim_debt_divergence_corr"] = corr
-    print(f"  Prediction 1 (debt → divergence):")
+    print("  Prediction 1 (debt -> divergence):")
     print(f"    Simulated correlation: {corr:.3f}")
 
     if "divergence_index" in empirical_df.columns and "debt_to_gdp" in empirical_df.columns:

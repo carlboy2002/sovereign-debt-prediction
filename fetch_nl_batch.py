@@ -1,21 +1,23 @@
 import os
 import ee
-import time
 
 # Read project ID from environment variable or config.py
-try:
-    from config import GCP_PROJECT_ID
-    project_id = GCP_PROJECT_ID
-except ImportError:
-    project_id = os.environ.get("GCP_PROJECT_ID", "your-gcp-project-id-here")
 
-ee.Initialize(project=project_id)
 
-countries = ee.FeatureCollection("FAO/GAUL/2015/level0")
-dmsp = ee.ImageCollection("NOAA/DMSP-OLS/NIGHTTIME_LIGHTS").select("stable_lights")
-viirs = ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG").select("avg_rad")
+def get_project_id():
+    try:
+        from config import GCP_PROJECT_ID
 
-def export_year(year):
+        project_id = GCP_PROJECT_ID
+    except ImportError:
+        project_id = os.environ.get("GCP_PROJECT_ID", "your-gcp-project-id-here")
+
+    if project_id == "your-gcp-project-id-here":
+        raise ValueError("Set GCP_PROJECT_ID in config.py or the environment before exporting.")
+    return project_id
+
+
+def export_year(year, countries, dmsp, viirs):
     start = ee.Date.fromYMD(year, 1, 1)
     end = ee.Date.fromYMD(year, 12, 31)
 
@@ -30,7 +32,7 @@ def export_year(year):
         stats = img.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=feature.geometry(),
-            scale=5000,  # 5km分辨率，比1km快很多，精度够用
+            scale=5000,  # 5 km resolution is much faster than 1 km and precise enough here.
             maxPixels=1e9,
             bestEffort=True,
         )
@@ -51,14 +53,26 @@ def export_year(year):
         selectors=["country_name", "iso_code", "year", "nl_mean"],
     )
     task.start()
-    print(f"  {year} 已提交")
+    print(f"  {year} submitted")
     return task
 
-# 提交所有年份
-tasks = []
-for year in range(2000, 2024):
-    tasks.append(export_year(year))
 
-print(f"\n已提交 {len(tasks)} 个任务")
-print("去 https://code.earthengine.google.com/tasks 查看进度")
-print("全部完成后，Google Drive里会有 nl_2000.csv 到 nl_2023.csv")
+def main():
+    project_id = get_project_id()
+    ee.Initialize(project=project_id)
+
+    countries = ee.FeatureCollection("FAO/GAUL/2015/level0")
+    dmsp = ee.ImageCollection("NOAA/DMSP-OLS/NIGHTTIME_LIGHTS").select("stable_lights")
+    viirs = ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG").select("avg_rad")
+
+    tasks = []
+    for year in range(2000, 2024):
+        tasks.append(export_year(year, countries, dmsp, viirs))
+
+    print(f"\nSubmitted {len(tasks)} tasks")
+    print("Check progress at https://code.earthengine.google.com/tasks")
+    print("After all tasks complete, Google Drive should contain nl_2000.csv through nl_2023.csv")
+
+
+if __name__ == "__main__":
+    main()

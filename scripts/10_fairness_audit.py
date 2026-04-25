@@ -13,10 +13,40 @@ import json
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score, average_precision_score
+from sklearn.metrics import confusion_matrix, roc_auc_score, average_precision_score, roc_curve
 from sklearn.impute import SimpleImputer
 import xgboost as xgb
 from config import DATA_PROCESSED, FIGURES, TABLES, XGB_PARAMS, SEED, REGION_GROUPS
+
+
+def metrics_at_threshold(y_true, y_prob, threshold):
+    """Compute classification metrics at a fixed threshold."""
+    y_pred = (y_prob >= threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    return {
+        "threshold": threshold,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+        "tp": tp,
+        "fpr": fp / max(fp + tn, 1),
+        "tpr": tp / max(tp + fn, 1),
+        "precision": tp / max(tp + fp, 1),
+        "recall": tp / max(tp + fn, 1),
+    }
+
+
+def choose_threshold_for_target_fpr(y_true, y_prob, target_fpr):
+    """Choose the threshold whose validation FPR is closest to target_fpr."""
+    candidate_thresholds = np.r_[np.inf, np.sort(np.unique(y_prob))[::-1], -np.inf]
+    metrics = [
+        metrics_at_threshold(y_true, y_prob, threshold)
+        for threshold in candidate_thresholds
+    ]
+    return min(
+        metrics,
+        key=lambda row: (abs(row["fpr"] - target_fpr), -row["tpr"], -row["threshold"]),
+    )
 
 
 def main():
@@ -32,27 +62,27 @@ def main():
 
     features = blocks["all"]
     existing = [f for f in features if f in df.columns]
+    existing = [f for f in existing if train[f].notna().any()]
 
-    # Train full model
+    # Prepare train and validation matrices
     imputer = SimpleImputer(strategy="median")
     X_train = pd.DataFrame(
         imputer.fit_transform(train[existing]), columns=existing
     )
     y_train = train["crisis_target"].values
+    X_val = pd.DataFrame(
+        imputer.transform(val[existing]), columns=existing
+    )
+    y_val = val["crisis_target"].values
 
     n_neg = (y_train == 0).sum()
     n_pos = max((y_train == 1).sum(), 1)
     params = XGB_PARAMS.copy()
     params["scale_pos_weight"] = n_neg / n_pos
+    params["early_stopping_rounds"] = 30
 
-    model = xgb.XGBClassifier(**params, use_label_encoder=False)
-    model.fit(X_train, y_train, verbose=False)
-
-    # Prepare validation set
-    X_val = pd.DataFrame(
-        imputer.transform(val[existing]), columns=existing
-    )
-    y_val = val["crisis_target"].values
+    model = xgb.XGBClassifier(**params)
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
     y_prob = model.predict_proba(X_val)[:, 1]
     val_with_preds = val.copy()
     val_with_preds["y_prob"] = y_prob
@@ -98,6 +128,49 @@ def main():
     region_df = pd.DataFrame(region_results)
     region_df.to_csv(TABLES / "fairness_by_region.csv", index=False)
     print(f"\n  Saved fairness_by_region.csv")
+
+    # ── Region-specific thresholds targeting the overall false-positive rate ─
+    threshold_rows = []
+    if len(np.unique(y_val)) > 1:
+        fpr, tpr, thresholds = roc_curve(y_val, y_prob)
+        best_idx = np.argmax(tpr - fpr)
+        overall_threshold = thresholds[best_idx]
+        overall_metrics = metrics_at_threshold(y_val, y_prob, overall_threshold)
+        target_fpr = overall_metrics["fpr"]
+        print(f"\n  Overall validation threshold: {overall_threshold:.4f}")
+        print(f"  Target FPR for regional recalibration: {target_fpr:.3f}")
+
+        for region_name, region_code in REGION_GROUPS.items():
+            subset = val_with_preds[val_with_preds[group_col] == region_code]
+            if len(subset) < 10 or subset["crisis_target"].nunique() < 2:
+                continue
+
+            y_true = subset["crisis_target"].values
+            y_region_prob = subset["y_prob"].values
+            global_threshold_metrics = metrics_at_threshold(
+                y_true, y_region_prob, overall_threshold
+            )
+            regional_threshold_metrics = choose_threshold_for_target_fpr(
+                y_true, y_region_prob, target_fpr
+            )
+            threshold_rows.append({
+                "region": region_name,
+                "n_obs": len(subset),
+                "n_crises": int(y_true.sum()),
+                "overall_threshold": overall_threshold,
+                "region_threshold": regional_threshold_metrics["threshold"],
+                "global_threshold_fpr": global_threshold_metrics["fpr"],
+                "global_threshold_recall": global_threshold_metrics["recall"],
+                "region_threshold_fpr": regional_threshold_metrics["fpr"],
+                "region_threshold_recall": regional_threshold_metrics["recall"],
+                "region_threshold_precision": regional_threshold_metrics["precision"],
+            })
+
+        if threshold_rows:
+            pd.DataFrame(threshold_rows).to_csv(
+                TABLES / "fairness_thresholds_by_region.csv", index=False
+            )
+            print("  Saved fairness_thresholds_by_region.csv")
 
     # ── Evaluate by income group ────────────────────────────────────────────
     if "income_level" in val.columns:

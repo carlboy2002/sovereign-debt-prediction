@@ -34,6 +34,7 @@ def main():
 
     features = blocks["all"]
     existing = [f for f in features if f in df.columns]
+    existing = [f for f in existing if train[f].notna().any()]
 
     # Prepare data
     imputer = SimpleImputer(strategy="median")
@@ -53,13 +54,15 @@ def main():
     print("  Running LASSO CV...")
     lasso_cv = LogisticRegressionCV(
         Cs=[1/a for a in LASSO_ALPHAS],  # sklearn uses C = 1/alpha
-        penalty="l1",
+        l1_ratios=[1.0],
         solver="saga",
         cv=5,
         scoring="roc_auc",
         class_weight="balanced",
         random_state=SEED,
-        max_iter=5000,
+        max_iter=20000,
+        tol=1e-3,
+        use_legacy_attributes=True,
     )
     lasso_cv.fit(X_train_scaled, y_train)
 
@@ -102,7 +105,7 @@ def main():
     # Print top features
     print(f"\n  Top 15 features (by |coefficient|):")
     for _, row in coefs.head(15).iterrows():
-        direction = "+" if row["coefficient"] > 0 else "−"
+        direction = "+" if row["coefficient"] > 0 else "-"
         print(f"    [{row['block']:9s}] {direction} {row['feature']:40s} {row['abs_coef']:.4f}")
 
     # ── Plot: LASSO coefficient path ────────────────────────────────────────
@@ -110,8 +113,9 @@ def main():
     coef_paths = []
     for alpha in LASSO_ALPHAS:
         lr = LogisticRegression(
-            C=1/alpha, penalty="l1", solver="saga",
-            class_weight="balanced", random_state=SEED, max_iter=5000,
+            C=1/alpha, l1_ratio=1.0, solver="saga",
+            class_weight="balanced", random_state=SEED, max_iter=20000,
+            tol=1e-3,
         )
         lr.fit(X_train_scaled, y_train)
         coef_paths.append(lr.coef_[0])

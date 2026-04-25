@@ -14,6 +14,11 @@ from config import (
     EXCLUDE_INCOME_GROUPS, REGION_GROUPS, HORIZON_YEARS,
 )
 
+try:
+    from config import INCLUDE_INCOME_GROUPS
+except ImportError:
+    INCLUDE_INCOME_GROUPS = ["LIC", "LMC", "UMC"]
+
 # ── GDELT country code to ISO3 mapping ──────────────────────────────────────
 # GDELT uses FIPS 10-4 codes (2 letters). This maps common ones to ISO 3166 alpha-3.
 # Not exhaustive — expand as needed.
@@ -38,14 +43,43 @@ FIPS_TO_ISO3 = {
 }
 
 
+INCOME_GROUP_ALIASES = {
+    "High income": "HIC",
+    "Low income": "LIC",
+    "Lower middle income": "LMC",
+    "Upper middle income": "UMC",
+    "Not classified": "INX",
+}
+
+
+def normalized_income_exclusions():
+    """Return excluded income groups using WDI short codes."""
+    return {
+        INCOME_GROUP_ALIASES.get(group, group)
+        for group in EXCLUDE_INCOME_GROUPS
+    }
+
+
 def load_wdi():
     """Load and filter WDI data."""
     path = DATA_RAW / "wdi_panel.csv"
     df = pd.read_csv(path)
 
-    # Filter to emerging markets (exclude high income)
+    # Keep only real, classified low- and middle-income economies.
+    if "income_level" in df.columns and INCLUDE_INCOME_GROUPS:
+        include = set(INCLUDE_INCOME_GROUPS)
+        before = len(df)
+        df = df[df["income_level"].isin(include)]
+        print(f"  Kept {len(df)} WDI rows from income groups: {sorted(include)}")
+        print(f"  Dropped {before - len(df)} rows outside the project country scope")
+
+    # Backward-compatible exclusion hook.
     if "income_level" in df.columns:
-        df = df[~df["income_level"].isin(EXCLUDE_INCOME_GROUPS)]
+        excluded = normalized_income_exclusions()
+        before = len(df)
+        df = df[~df["income_level"].isin(excluded)]
+        if before != len(df):
+            print(f"  Excluded {before - len(df)} WDI rows from income groups: {sorted(excluded)}")
 
     # Filter year range
     df = df[df["year"].between(YEAR_START, YEAR_END)]
@@ -100,14 +134,6 @@ def build_prediction_target(panel, horizon=HORIZON_YEARS):
     ].copy()
     onsets = onsets.rename(columns={"year": "onset_year"})
 
-    # For each country-year, check if onset within next N years
-    panel["crisis_target"] = 0
-    for _, row in onsets.iterrows():
-        mask = (
-            (panel["iso3c"] == row["onset_year"])  # wrong, fix below
-        )
-
-    # Simpler approach: iterate by country
     panel["crisis_target"] = 0
     for iso3c in panel["iso3c"].unique():
         country_onsets = onsets[onsets["iso3c"] == iso3c]["onset_year"].values
@@ -148,7 +174,10 @@ def main():
     panel = panel.merge(gdelt[gdelt_cols], on=["iso3c", "year"], how="left")
 
     # Merge crisis labels
-    crisis_cols = ["iso3c", "year", "in_crisis", "crisis_onset"]
+    crisis_cols = [
+        "iso3c", "year", "in_crisis", "crisis_onset",
+        "crisis_start", "crisis_end", "crisis_source",
+    ]
     crisis_cols = [c for c in crisis_cols if c in crisis.columns]
     panel = panel.merge(crisis[crisis_cols], on=["iso3c", "year"], how="left")
 

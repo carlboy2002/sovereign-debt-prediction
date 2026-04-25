@@ -20,13 +20,17 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import (
-    roc_auc_score, precision_recall_curve, average_precision_score,
-    classification_report, roc_curve, confusion_matrix,
+    roc_auc_score, average_precision_score, roc_curve, confusion_matrix,
 )
 from sklearn.impute import SimpleImputer
 import xgboost as xgb
 import shap
 from config import DATA_PROCESSED, FIGURES, TABLES, XGB_PARAMS, SEED
+
+try:
+    from config import EVALUATE_TEST_SET
+except ImportError:
+    EVALUATE_TEST_SET = False
 
 np.random.seed(SEED)
 
@@ -49,6 +53,7 @@ def load_data():
 def prepare_xy(df, features):
     """Extract X, y arrays with imputation."""
     existing = [f for f in features if f in df.columns]
+    existing = [f for f in existing if df[f].notna().any()]
     X = df[existing].copy()
 
     # Impute missing with median
@@ -66,8 +71,9 @@ def train_xgb(X_train, y_train, X_val, y_val):
     n_pos = max((y_train == 1).sum(), 1)
     params = XGB_PARAMS.copy()
     params["scale_pos_weight"] = n_neg / n_pos
+    params["early_stopping_rounds"] = 30
 
-    model = xgb.XGBClassifier(**params, use_label_encoder=False)
+    model = xgb.XGBClassifier(**params)
     model.fit(
         X_train, y_train,
         eval_set=[(X_val, y_val)],
@@ -130,18 +136,23 @@ def plot_shap(model, X, spec_name):
     """SHAP summary plot for a given model."""
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X)
+    rng = np.random.default_rng(SEED)
 
     fig, ax = plt.subplots(figsize=(10, 8))
-    shap.summary_plot(shap_values, X, plot_type="bar", max_display=20, show=False)
-    plt.title(f"SHAP Feature Importance — {spec_name}")
+    shap.summary_plot(
+        shap_values, X, plot_type="bar", max_display=20, show=False, rng=rng
+    )
+    plt.title(f"SHAP Feature Importance - {spec_name}")
     plt.tight_layout()
     plt.savefig(FIGURES / f"shap_{spec_name.replace(' + ', '_')}.png", bbox_inches="tight")
     plt.close()
 
     # Also save beeswarm
     fig, ax = plt.subplots(figsize=(10, 8))
-    shap.summary_plot(shap_values, X, max_display=15, show=False)
-    plt.title(f"SHAP Summary — {spec_name}")
+    shap.summary_plot(
+        shap_values, X, max_display=15, show=False, rng=np.random.default_rng(SEED)
+    )
+    plt.title(f"SHAP Summary - {spec_name}")
     plt.tight_layout()
     plt.savefig(FIGURES / f"shap_beeswarm_{spec_name.replace(' + ', '_')}.png", bbox_inches="tight")
     plt.close()
@@ -164,14 +175,18 @@ def main():
 
     all_results = []
     models = {}
+    imputers = {}
+    feature_columns = {}
     X_val_dict = {}
 
     for spec_name, features in specs.items():
-        print(f"\n  === {spec_name} ({len(features)} features) ===")
+        print(f"\n  === {spec_name} ({len(features)} candidate features) ===")
 
         # Prepare data
         X_train, y_train, imp = prepare_xy(train, features)
-        existing = [f for f in features if f in val.columns]
+        existing = list(X_train.columns)
+        if len(existing) != len(features):
+            print(f"    Usable features after dropping all-missing train columns: {len(existing)}")
         X_v = val[existing].copy()
         X_v = pd.DataFrame(
             imp.transform(X_v), columns=existing, index=X_v.index
@@ -185,6 +200,8 @@ def main():
         results = evaluate(model, X_v, y_v, spec_name)
         all_results.append(results)
         models[spec_name] = model
+        imputers[spec_name] = imp
+        feature_columns[spec_name] = existing
         X_val_dict[spec_name] = X_v
 
         print(f"    AUC: {results.get('auc', 'N/A'):.3f}")
@@ -204,18 +221,29 @@ def main():
     best_name = "All Features"
     plot_shap(models[best_name], X_val_dict[best_name], best_name)
 
-    # ── HOLD-OUT TEST SET (uncomment ONLY for final evaluation) ──────────
-    # print("\n  === FINAL TEST SET EVALUATION ===")
-    # for spec_name, model in models.items():
-    #     features = specs[spec_name]
-    #     existing = [f for f in features if f in test.columns]
-    #     X_test = test[existing].copy()
-    #     X_test = pd.DataFrame(imp.transform(X_test), columns=existing)
-    #     y_test = test["crisis_target"].values
-    #     test_results = evaluate(model, X_test, y_test, f"{spec_name} (TEST)")
-    #     print(f"  {spec_name}: AUC={test_results['auc']:.3f}")
-
-    print("\nDone. Test set evaluation is commented out — uncomment ONLY for final run.")
+    if EVALUATE_TEST_SET:
+        print("\n  === FINAL TEST SET EVALUATION ===")
+        test_results_all = []
+        for spec_name, model in models.items():
+            imp = imputers[spec_name]
+            existing = feature_columns[spec_name]
+            X_test = test[existing].copy()
+            X_test = pd.DataFrame(
+                imp.transform(X_test), columns=existing, index=X_test.index
+            )
+            y_test = test["crisis_target"].values
+            test_results = evaluate(model, X_test, y_test, f"{spec_name} (TEST)")
+            test_results_all.append(test_results)
+            print(
+                f"  {spec_name}: AUC={test_results['auc']:.3f}, "
+                f"AP={test_results['avg_precision']:.3f}"
+            )
+        pd.DataFrame(test_results_all).to_csv(
+            TABLES / "xgboost_test_results.csv", index=False
+        )
+        print("  Saved xgboost_test_results.csv")
+    else:
+        print("\nDone. Test set evaluation is locked. Set EVALUATE_TEST_SET=True for the final run.")
 
 
 if __name__ == "__main__":

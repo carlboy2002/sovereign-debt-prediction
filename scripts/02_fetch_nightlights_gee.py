@@ -1,26 +1,27 @@
 """
-02_fetch_nightlights_gee.py — 用Google Earth Engine计算国家级夜间灯光数据
+02_fetch_nightlights_gee.py - compute country-level nightlights data with Google Earth Engine
 
-这个脚本在云端完成所有计算，本地不需要处理大文件。
+This script runs all computations in the cloud, so the local machine does not
+need to process large files.
 
-前置步骤：
-    1. 注册GEE: https://earthengine.google.com → Register
+Prerequisites:
+    1. Register for GEE: https://earthengine.google.com -> Register
     2. pip install earthengine-api
-    3. earthengine authenticate（浏览器授权）
+    3. earthengine authenticate (browser authorization)
 
-输出：
-    - Google Drive里会出现一个 nightlights_by_country.csv
-    - 下载后放到 data/raw/nightlights_by_country.csv
+Output:
+    - Google Drive will contain nightlights_by_country.csv.
+    - Download it to data/raw/nightlights_by_country.csv.
 
-数据源：
-    - Li et al. (2020) Harmonized NTL dataset（GEE社区目录已收录）
-    - FAO GAUL 国家边界
+Data sources:
+    - Li et al. (2020) Harmonized NTL dataset, available in the GEE community catalog.
+    - FAO GAUL country boundaries.
 """
 
 import ee
 import time
 
-# ── 初始化 ──────────────────────────────────────────────────────────────────
+# Initialization
 import os
 import sys
 from pathlib import Path
@@ -36,39 +37,39 @@ except ImportError:
 
 ee.Initialize(project=project_id)
 
-print("Google Earth Engine 初始化成功")
+print("Google Earth Engine initialized successfully")
 
-# ── 加载数据 ─────────────────────────────────────────────────────────────────
+# Load data
 
-# 国家边界（FAO GAUL 2015）
+# Country boundaries (FAO GAUL 2015).
 countries = ee.FeatureCollection("FAO/GAUL/2015/level0")
-print(f"  国家边界已加载: {countries.size().getInfo()} 个国家/地区")
+print(f"  Country boundaries loaded: {countries.size().getInfo()} countries/territories")
 
-# 夜间灯光 — 使用GEE内置的DMSP和VIIRS数据
+# Nightlights data from the DMSP and VIIRS datasets available in GEE.
 # DMSP-OLS: 1992-2013
 dmsp = ee.ImageCollection("NOAA/DMSP-OLS/NIGHTTIME_LIGHTS").select("stable_lights")
-# VIIRS-DNB: 2014-至今
+# VIIRS-DNB: 2014-present
 viirs = ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG").select("avg_rad")
 
 
-# ── 核心函数：计算一年的国家级灯光值 ────────────────────────────────────────
+# Core functions: compute country-level nightlights values for one year.
 
 
 def compute_country_stats_dmsp(year):
-    """计算DMSP卫星某一年的国家级灯光统计"""
+    """Compute country-level DMSP nightlights statistics for a given year."""
     year = ee.Number(year)
 
-    # DMSP每年有1-2颗卫星，取该年所有影像的均值
+    # DMSP has one to two satellites per year; use the mean of all images in the year.
     start = ee.Date.fromYMD(year, 1, 1)
     end = ee.Date.fromYMD(year, 12, 31)
     annual = dmsp.filterDate(start, end).mean()
 
-    # 对每个国家计算均值和总和
+    # Compute the mean and sum for each country.
     def reduce_country(feature):
         stats = annual.reduceRegion(
             reducer=ee.Reducer.mean().combine(ee.Reducer.sum(), sharedInputs=True),
             geometry=feature.geometry(),
-            scale=1000,  # 1km分辨率
+            scale=1000,  # 1 km resolution.
             maxPixels=1e9,
             bestEffort=True,
         )
@@ -86,14 +87,14 @@ def compute_country_stats_dmsp(year):
 
 
 def compute_country_stats_viirs(year):
-    """计算VIIRS卫星某一年的国家级灯光统计"""
+    """Compute country-level VIIRS nightlights statistics for a given year."""
     year = ee.Number(year)
 
     start = ee.Date.fromYMD(year, 1, 1)
     end = ee.Date.fromYMD(year, 12, 31)
     annual = viirs.filterDate(start, end).mean()
 
-    # 去掉负值（噪声）
+    # Remove negative values, which are noise.
     annual = annual.max(0)
 
     def reduce_country(feature):
@@ -117,42 +118,42 @@ def compute_country_stats_viirs(year):
     return countries.map(reduce_country)
 
 
-# ── 主流程 ───────────────────────────────────────────────────────────────────
+# Main workflow
 
 
 def main():
-    print("\n开始计算国家级夜间灯光数据...")
-    print("所有计算在Google服务器上运行，请耐心等待。\n")
+    print("\nStarting country-level nightlights computation...")
+    print("All computations run on Google servers; please be patient.\n")
 
-    # DMSP年份: 2000-2013
+    # DMSP years: 2000-2013.
     dmsp_years = list(range(2000, 2014))
-    # VIIRS年份: 2014-2023
+    # VIIRS years: 2014-2023.
     viirs_years = list(range(2014, 2024))
 
     all_features = []
 
-    # 处理DMSP（2000-2013）
+    # Process DMSP data (2000-2013).
     print("=== DMSP (2000-2013) ===")
     for year in dmsp_years:
-        print(f"  处理 {year}...", end=" ", flush=True)
+        print(f"  Processing {year}...", end=" ", flush=True)
         fc = compute_country_stats_dmsp(year)
         all_features.append(fc)
-        print("✓")
+        print("OK")
 
-    # 处理VIIRS（2014-2023）
+    # Process VIIRS data (2014-2023).
     print("\n=== VIIRS (2014-2023) ===")
     for year in viirs_years:
-        print(f"  处理 {year}...", end=" ", flush=True)
+        print(f"  Processing {year}...", end=" ", flush=True)
         fc = compute_country_stats_viirs(year)
         all_features.append(fc)
-        print("✓")
+        print("OK")
 
-    # 合并所有年份
-    print("\n合并所有年份...")
+    # Merge all years.
+    print("\nMerging all years...")
     merged = ee.FeatureCollection(all_features).flatten()
 
-    # 导出到Google Drive
-    print("导出到Google Drive...")
+    # Export to Google Drive.
+    print("Exporting to Google Drive...")
     task = ee.batch.Export.table.toDrive(
         collection=merged,
         description="nightlights_by_country",
@@ -161,33 +162,33 @@ def main():
         selectors=["country_name", "iso_code", "year", "nl_mean", "nl_sum"],
     )
     task.start()
-    print(f"  导出任务已提交: {task.status()['state']}")
+    print(f"  Export task submitted: {task.status()['state']}")
 
-    # 等待完成
-    print("\n等待导出完成（通常需要10-30分钟）...")
-    print("你也可以去 https://code.earthengine.google.com/tasks 查看进度\n")
+    # Wait for completion.
+    print("\nWaiting for export to complete; this usually takes 10-30 minutes...")
+    print("You can also check progress at https://code.earthengine.google.com/tasks\n")
 
     while task.active():
         status = task.status()
-        print(f"  状态: {status['state']}...", flush=True)
+        print(f"  Status: {status['state']}...", flush=True)
         time.sleep(30)
 
     final_status = task.status()
     if final_status["state"] == "COMPLETED":
-        print("\n✓ 导出完成！")
-        print("  文件位置: Google Drive 根目录 → nightlights_by_country.csv")
-        print("  下载后放到: data/raw/nightlights_by_country.csv")
+        print("\nExport complete.")
+        print("  File location: Google Drive root directory -> nightlights_by_country.csv")
+        print("  Download it to: data/raw/nightlights_by_country.csv")
     else:
-        print(f"\n✗ 导出失败: {final_status}")
-        print("  常见原因: 超时或内存不足")
-        print("  解决方案: 减少年份范围，分批导出")
+        print(f"\nExport failed: {final_status}")
+        print("  Common causes: timeout or insufficient memory")
+        print("  Suggested fix: reduce the year range and export in batches")
 
 
-# ── 备选方案：分批导出（如果一次性导出超时）──────────────────────────────────
+# Alternative: batch exports if a single full export times out.
 
 
 def export_single_year(year, sensor="viirs"):
-    """单独导出某一年的数据（用于排查问题）"""
+    """Export one year separately for troubleshooting."""
     ee.Initialize()
 
     if sensor == "dmsp":
@@ -203,7 +204,7 @@ def export_single_year(year, sensor="viirs"):
         selectors=["country_name", "iso_code", "year", "nl_mean", "nl_sum"],
     )
     task.start()
-    print(f"  {year} 导出任务已提交")
+    print(f"  {year} export task submitted")
     return task
 
 

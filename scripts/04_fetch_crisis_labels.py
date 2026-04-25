@@ -22,7 +22,6 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 
 import pandas as pd
-import numpy as np
 from config import DATA_RAW, YEAR_START, YEAR_END
 
 # ── Hardcoded sovereign debt crisis episodes ─────────────────────────────────
@@ -161,19 +160,33 @@ def build_crisis_panel():
 
     # Try Laeven & Valencia first
     lv_data = load_laeven_valencia()
+    if lv_data is not None:
+        print("  NOTE: Laeven & Valencia file was loaded but curated crisis episodes are still used.")
+        print("        Review the Excel schema before merging it into the label panel.")
 
     # Use hardcoded list (supplement or primary)
     records = []
+    episode_records = []
     for iso3c, start, end in KNOWN_CRISES:
+        source = "curated_laeven_valencia_reinhart_rogoff_imf_reports"
+        episode_records.append({
+            "iso3c": iso3c,
+            "crisis_start": start,
+            "crisis_end": end,
+            "crisis_source": source,
+        })
         for year in range(max(start, YEAR_START), min(end, YEAR_END) + 1):
             records.append({
                 "iso3c": iso3c,
                 "year": year,
                 "in_crisis": 1,
                 "crisis_start": start,
+                "crisis_end": end,
+                "crisis_source": source,
             })
 
     crisis_df = pd.DataFrame(records)
+    episodes_df = pd.DataFrame(episode_records)
 
     # Mark onset (first year of each episode)
     crisis_df["crisis_onset"] = (
@@ -184,18 +197,24 @@ def build_crisis_panel():
     crisis_df = crisis_df.groupby(["iso3c", "year"]).agg({
         "in_crisis": "max",
         "crisis_onset": "max",
+        "crisis_start": "min",
+        "crisis_end": "max",
+        "crisis_source": lambda x: ";".join(sorted(set(x))),
     }).reset_index()
 
     # Create full panel (all country-years, including non-crisis)
     # We'll merge with actual country list in 05_clean_merge.py
     # For now, just save the crisis episodes
     out_path = DATA_RAW / "crisis_labels.csv"
+    episodes_path = DATA_RAW / "crisis_episodes.csv"
     crisis_df.to_csv(out_path, index=False)
+    episodes_df.to_csv(episodes_path, index=False)
 
     n_episodes = len(KNOWN_CRISES)
     n_countries = crisis_df["iso3c"].nunique()
     n_crisis_years = len(crisis_df)
     print(f"  Saved: {out_path}")
+    print(f"  Saved: {episodes_path}")
     print(f"  {n_episodes} crisis episodes across {n_countries} countries")
     print(f"  {n_crisis_years} country-year observations flagged as crisis")
 

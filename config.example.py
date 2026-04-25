@@ -31,6 +31,9 @@ VAL_END = 2020
 TEST_START = 2021
 TEST_END = 2023
 
+# Keep False until the final model-freeze run. The test set should be evaluated once.
+EVALUATE_TEST_SET = False
+
 # ── CRISIS PREDICTION HORIZON ───────────────────────────────────────────────
 HORIZON_YEARS = 3
 
@@ -38,7 +41,9 @@ HORIZON_YEARS = 3
 LAGS = [1, 2, 3]
 
 # ── COUNTRY SCOPE ────────────────────────────────────────────────────────────
-EXCLUDE_INCOME_GROUPS = ["High income"]
+# WDI income-level codes. Keep only non-high-income, classified economies.
+INCLUDE_INCOME_GROUPS = ["LIC", "LMC", "UMC"]
+EXCLUDE_INCOME_GROUPS = ["HIC"]
 
 # ── REGION MAPPING ───────────────────────────────────────────────────────────
 REGION_GROUPS = {
