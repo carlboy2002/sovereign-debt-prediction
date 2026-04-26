@@ -387,8 +387,6 @@ The structural signaling game supports the project narrative but is not fully es
 
 ## Suggested Next Improvements
 
-The current project is methodologically coherent enough for a final Applied Machine Learning submission. The most valuable improvements, if time allows, are:
-
 1. If a true final test set is required, either extend crisis labels through 2026 or switch to a one-year horizon before freezing results.
 2. Update the static dashboard if final reported figures change.
 3. Add a short appendix explaining why average precision is prioritized over AUC.
